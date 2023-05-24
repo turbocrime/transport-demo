@@ -21,7 +21,7 @@ make sure the demo-www server is running at http://localhost:3000. then,
 pnpm start
 ```
 
-if `web-ext` can't find your chrome binary, you may need to specify it like `CHROME_PATH=/Applications/Chromium.app/Contents/MacOS/Chromium`
+if `web-ext` can't find your browser, you will see `Error code: ERR_LAUNCHER_NOT_INSTALLED`. specify your binary location with something like `CHROME_PATH=/Applications/Chromium.app/Contents/MacOS/Chromium`
 
 # dev
 

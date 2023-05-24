@@ -4,10 +4,12 @@ proof of concept for a message-passing bufbuild transport. includes a demo web p
 
 # how
 
+from this git root
+
 ```
 pnpm install
-pnpm run -C demo-ext build
-pnpm run -r start
+pnpm build
+pnpm start
 ```
 
-for `start` you may need to specify your chromium binary location with an env var like `CHROME_PATH=/Applications/Chromium.app/Contents/MacOS/Chromium`
+if `web-ext` can't find your browser, you will see `Error code: ERR_LAUNCHER_NOT_INSTALLED`. specify your binary location with something like `CHROME_PATH=/Applications/Chromium.app/Contents/MacOS/Chromium`
