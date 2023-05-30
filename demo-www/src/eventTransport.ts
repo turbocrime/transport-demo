@@ -1,16 +1,8 @@
 import { createRouterTransport } from "@bufbuild/connect";
-import { Message } from "@bufbuild/protobuf";
-import type { JsonValue } from "@bufbuild/protobuf";
+import { Message, MethodKind } from "@bufbuild/protobuf";
 
-import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
-import {
-	SayRequest,
-	SayResponse,
-	IntroduceRequest,
-	IntroduceResponse,
-	ConverseRequest,
-	ConverseResponse,
-} from "@buf/bufbuild_eliza.bufbuild_es/buf/connect/demo/eliza/v1/eliza_pb";
+import type { ServiceImpl } from "@bufbuild/connect";
+import type { JsonValue, MethodInfo, ServiceType } from "@bufbuild/protobuf";
 
 type TransportMessageEventData = {
 	type: "_BUF_TRANSPORT_I" | "_BUF_TRANSPORT_O";
@@ -21,7 +13,28 @@ type TransportMessageEventData = {
 	typeName: string;
 };
 
-export const createEventTransport = (s: typeof ElizaService) =>
+type CreateAnyImplMethod = (
+	method: MethodInfo & { localName: string; service: ServiceType },
+	// rome-ignore lint/suspicious/noExplicitAny:
+) => ((...args: any[]) => any) | null;
+
+const makeAnyServiceImpl = (
+	service: ServiceType,
+	createMethod: CreateAnyImplMethod,
+): ServiceImpl<typeof service> => {
+	const impl: ServiceImpl<typeof service> = {};
+	for (const [localName, methodInfo] of Object.entries(service.methods)) {
+		const method = createMethod({
+			...methodInfo,
+			localName,
+			service,
+		});
+		if (method) impl[localName] = method;
+	}
+	return impl;
+};
+
+export const createEventTransport = (s: ServiceType) =>
 	createRouterTransport(({ service }) => {
 		type IRequestRecord = {
 			resolve: (m: TransportMessageEventData) => void;
@@ -54,7 +67,7 @@ export const createEventTransport = (s: typeof ElizaService) =>
 		};
 		window.addEventListener("message", outputEventListener);
 
-		const unaryI = async (
+		const unaryIO = async (
 			input: JsonValue,
 			typeName: string,
 		): Promise<{ output: JsonValue; typeName: string }> => {
@@ -75,17 +88,7 @@ export const createEventTransport = (s: typeof ElizaService) =>
 			return { output: response.message, typeName: response.typeName };
 		};
 
-		const unaryEventClient = async <I extends Message, O extends Message>(
-			request: I,
-		): Promise<O> => {
-			const { output, typeName } = await unaryI(
-				request.toJson(),
-				request.getType().typeName,
-			);
-			return output as unknown as O; // TODO: coerce properly
-		};
-
-		const serverStreamI = async function* (
+		const serverStreamIO = async function* (
 			input: JsonValue,
 			typeName: string,
 		): AsyncGenerator<{ output: JsonValue; typeName: string }> {
@@ -99,8 +102,10 @@ export const createEventTransport = (s: typeof ElizaService) =>
 					queueContent?.();
 					queueContent = null;
 				},
-				reject: (e?: Error) => {
-					throw e; // TODO?
+				reject: (m: TransportMessageEventData) => {
+					queue.push(m);
+					queueContent?.();
+					queueContent = null;
 				},
 			} as IRequestRecord);
 
@@ -116,58 +121,46 @@ export const createEventTransport = (s: typeof ElizaService) =>
 					await new Promise((resolve) => {
 						queueContent = resolve;
 					});
-				const partial = queue.shift();
-				if (partial instanceof Error) throw partial;
 				const { stream, failure, message, typeName } =
-					partial as TransportMessageEventData;
-				if (stream?.end || failure) break;
+					queue.shift() as TransportMessageEventData;
+				if (failure) throw failure;
+				if (stream?.end) break;
 				yield { output: message, typeName };
 			}
 		};
 
-		async function* serverStreamEventClient<
-			I extends Message,
-			O extends Message,
-		>(request: I): AsyncGenerator<O> {
-			const stream = serverStreamI(
-				request.toJson(),
-				request.getType().typeName,
-			);
-			for await (const { output, typeName } of stream) {
-				yield output as unknown as O; // TODO: coerce properly
+		const makeEventImplMethod: CreateAnyImplMethod = (method) => {
+			switch (method.kind) {
+				case MethodKind.Unary:
+					return async function (request) {
+						const { output, typeName } = await unaryIO(
+							request.toJson(),
+							request.getType().typeName,
+						);
+						// TODO: coerce properly
+						return output;
+					};
+				case MethodKind.ServerStreaming:
+					return async function* (request: Message) {
+						const stream = serverStreamIO(
+							request.toJson(),
+							request.getType().typeName,
+						);
+						// TODO: coerce properly
+						for await (const { output, typeName } of stream) yield output;
+					};
+				case MethodKind.ClientStreaming:
+					return async function (request: AsyncIterable<Message>) {
+						return Promise.resolve({ sentence: "TODO" });
+					};
+				case MethodKind.BiDiStreaming:
+					return async function* (request: AsyncIterable<Message>) {
+						yield { sentence: "TODO" };
+					};
+				default:
+					return null;
 			}
-		}
+		};
 
-		async function* clientStreamEventClient<
-			I extends Message,
-			O extends Message,
-		>(inputStream: AsyncIterable<I>): AsyncGenerator<O> {
-			yield { sentence: "TODO" } as unknown as O; // TODO
-		}
-
-		service(s, {
-			say: async function (message: SayRequest) {
-				const out = unaryEventClient<SayRequest, SayResponse>(message);
-				return new SayResponse(await out);
-			},
-			introduce: async function* (message) {
-				const out = serverStreamEventClient<
-					IntroduceRequest,
-					IntroduceResponse
-				>(message);
-				for await (const part of out) {
-					yield new IntroduceResponse(part);
-				}
-			},
-			converse: async function* (
-				messageStream: AsyncIterable<ConverseRequest>,
-			) {
-				const out = clientStreamEventClient<ConverseRequest, ConverseResponse>(
-					messageStream,
-				);
-				for await (const part of out) {
-					yield new ConverseResponse(part);
-				}
-			},
-		});
+		service(s, makeAnyServiceImpl(s, makeEventImplMethod));
 	});

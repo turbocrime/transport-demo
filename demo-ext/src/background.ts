@@ -1,8 +1,7 @@
 import { createConnectTransport } from "@bufbuild/connect-web";
 import { createPromiseClient } from "@bufbuild/connect";
 import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
-import { SayResponse } from "@buf/bufbuild_eliza.bufbuild_es/buf/connect/demo/eliza/v1/eliza_pb";
-import { createRegistry, Any } from "@bufbuild/protobuf";
+import { createRegistry } from "@bufbuild/protobuf";
 import type { JsonValue } from "@bufbuild/protobuf";
 
 chrome.runtime.onInstalled.addListener(() =>
@@ -74,16 +73,17 @@ chrome.runtime.onMessage.addListener(
 			};
 			const stream = await proxiedClient.introduce(mEsSaGe);
 			let streamIdx = 0;
-			for await (const partial of stream) {
-				const partialMessage: TransportMessageEvent = {
-					type: "_BUF_TRANSPORT_O",
-					sequence,
-					stream: { sequence: streamIdx++ },
-					message: partial.toJson(),
-					typeName: partial.getType().typeName,
-				};
-				chrome.tabs.sendMessage(sender?.tab?.id as number, partialMessage);
-			}
+			for await (const partial of stream)
+				chrome.tabs.sendMessage(
+					sender?.tab?.id as number,
+					{
+						type: "_BUF_TRANSPORT_O",
+						sequence,
+						stream: { sequence: streamIdx++ },
+						message: partial.toJson(),
+						typeName: partial.getType().typeName,
+					} as TransportMessageEvent,
+				);
 			chrome.tabs.sendMessage(sender?.tab?.id as number, {
 				type: "_BUF_TRANSPORT_O",
 				sequence,
