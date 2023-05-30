@@ -2,55 +2,94 @@ import { createConnectTransport } from "@bufbuild/connect-web";
 import { createPromiseClient } from "@bufbuild/connect";
 import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
 import { SayResponse } from "@buf/bufbuild_eliza.bufbuild_es/buf/connect/demo/eliza/v1/eliza_pb";
-import { JsonValue } from "@bufbuild/protobuf";
+import { createRegistry, Any } from "@bufbuild/protobuf";
+import type { JsonValue } from "@bufbuild/protobuf";
 
 chrome.runtime.onInstalled.addListener(() =>
 	console.log("Background installed"),
 );
+
 chrome.tabs.onCreated.addListener((tab) =>
 	console.log("Background detected tab creation", tab),
 );
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
 	console.log("Background detected tab update", tabId, changeInfo, tab),
 );
 
-const client = createPromiseClient(
+// TODO: per connected page
+const proxiedClient = createPromiseClient(
 	ElizaService,
 	createConnectTransport({ baseUrl: "https://demo.connect.build" }),
 );
 
 type TransportMessageEvent = {
-	type: string;
+	type: "_BUF_TRANSPORT_I" | "_BUF_TRANSPORT_O";
 	sequence: number;
-	request?: JsonValue;
-	response?: JsonValue;
+	stream?: { sequence: number; end?: true };
+	message: JsonValue;
 	typeName: string;
 };
 
+// TODO: use Any.pack() and registry to unpack instead of json and string matching
+const registry = createRegistry(ElizaService);
+console.log("Background elizaTypes", registry);
+
+const counterpart = (typeName: string) =>
+	typeName.replace(/Request$/, "Response") ||
+	typeName.replace(/Response$/, "Request");
+
 chrome.runtime.onMessage.addListener(
-	async <M extends TransportMessageEvent>(
-		message: M,
+	async (
+		messageEvent: TransportMessageEvent,
 		sender: chrome.runtime.MessageSender,
 	) => {
-		console.log("Background onMessage", message, sender);
-		if (message.type === "BUF_TRANSPORT_REQUEST") {
-			const { sequence, request, typeName } = message;
-			// TODO: select request by typeName, type response appropriately
-			const response = await client.say(request as { sentence: string });
-			const modifiedResponse = new SayResponse({
+		if (messageEvent.type !== "_BUF_TRANSPORT_I") return;
+		const { sequence, stream, message, typeName } = messageEvent;
+		const inputMessage = registry.findMessage(typeName)!;
+		const outputMessage = registry.findMessage(counterpart(typeName))!;
+		console.log("Background identified type pair", inputMessage, outputMessage);
+		if (inputMessage.typeName === "buf.connect.demo.eliza.v1.SayRequest") {
+			const response = await proxiedClient.say(message as { sentence: string });
+			// modify response
+			const esnopser = new outputMessage({
 				sentence: [...response.sentence].reverse().join(""),
 			});
-			const responseMessage = {
-				success: true,
-				type: "BUF_TRANSPORT_RESPONSE",
+			const responseMessage: TransportMessageEvent = {
+				type: "_BUF_TRANSPORT_O",
 				sequence,
-				response: modifiedResponse.toJson(),
-				typeName: modifiedResponse.getType().typeName,
+				message: esnopser.toJson(),
+				typeName: esnopser.getType().typeName,
 			};
-			console.log("Background response", responseMessage);
 			chrome.tabs.sendMessage(sender?.tab?.id as number, responseMessage);
-		} else {
-			console.warn("Background unknown message type", message);
+		}
+		if (
+			inputMessage.typeName === "buf.connect.demo.eliza.v1.IntroduceRequest"
+		) {
+			// modify request
+			const mEsSaGe = {
+				name: Array.from((message as { name: string }).name)
+					.map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase()))
+					.join(""),
+			};
+			const stream = await proxiedClient.introduce(mEsSaGe);
+			let streamIdx = 0;
+			for await (const partial of stream) {
+				const partialMessage: TransportMessageEvent = {
+					type: "_BUF_TRANSPORT_O",
+					sequence,
+					stream: { sequence: streamIdx++ },
+					message: partial.toJson(),
+					typeName: partial.getType().typeName,
+				};
+				chrome.tabs.sendMessage(sender?.tab?.id as number, partialMessage);
+			}
+			chrome.tabs.sendMessage(sender?.tab?.id as number, {
+				type: "_BUF_TRANSPORT_O",
+				sequence,
+				stream: { sequence: streamIdx, end: true },
+				typeName: outputMessage.typeName,
+			});
 		}
 	},
 );

@@ -1,14 +1,14 @@
 import { createPromiseClient } from "@bufbuild/connect";
 //import { IntroduceRequest } from "@buf/bufbuild_eliza.bufbuild_es/buf/connect/demo/eliza/v1/eliza_pb";
 import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
-import { createWebExtTransport } from "./webExtTransport";
+import { createEventTransport } from "./eventTransport";
 
 let introFinished = false;
 
 // Make the Eliza extension client
 const client = createPromiseClient(
 	ElizaService,
-	createWebExtTransport(ElizaService),
+	createEventTransport(ElizaService),
 );
 
 /*
@@ -57,9 +57,9 @@ async function send() {
 		const response = await client.say({ sentence });
 		addNode(response.sentence, "eliza");
 	} else {
-		//const request = new IntroduceRequest({ name: sentence, });
-		//for await (const response of client.introduce(request)) { addNode(response.sentence, "eliza"); }
-		addNode("streaming not yet implemented. say another thing.", "turbocrime");
+		for await (const response of client.introduce({ name: sentence })) {
+			addNode(response.sentence, "eliza");
+		}
 		introFinished = true;
 	}
 }

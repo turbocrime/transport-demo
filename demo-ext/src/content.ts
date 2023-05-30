@@ -1,7 +1,9 @@
 window.addEventListener("message", ({ data, source }) => {
-	if (data?.type === "BUF_TRANSPORT_REQUEST") chrome.runtime.sendMessage(data);
+	console.log("Content received message from www", data, source);
+	if (data?.type === "_BUF_TRANSPORT_I") chrome.runtime.sendMessage(data);
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-	if (message.type === "BUF_TRANSPORT_RESPONSE") window.postMessage(message);
+	console.log("Content received message from ext", message, sender);
+	if (message.type === "_BUF_TRANSPORT_O") window.postMessage(message);
 });
