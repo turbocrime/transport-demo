@@ -1,6 +1,6 @@
 import { createRouterTransport } from "@bufbuild/connect";
 import { Message } from "@bufbuild/protobuf";
-import type { JsonValue, PartialMessage } from "@bufbuild/protobuf";
+import type { JsonValue } from "@bufbuild/protobuf";
 
 import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
 import {
@@ -16,21 +16,21 @@ type TransportMessageEventData = {
 	type: "_BUF_TRANSPORT_I" | "_BUF_TRANSPORT_O";
 	sequence: number;
 	stream?: { sequence: number; end?: true };
-	failure?: unknown;
+	failure?: Error;
 	message: JsonValue;
 	typeName: string;
 };
 
 export const createEventTransport = (s: typeof ElizaService) =>
 	createRouterTransport(({ service }) => {
-		type Responder = {
+		type IRequestRecord = {
 			resolve: (m: TransportMessageEventData) => void;
-			reject: <T>(reason?: T) => void;
+			reject: (e?: Error | TransportMessageEventData) => void;
 		};
 
 		const pending = {
 			sequence: 0,
-			requests: new Map<number, Responder>(),
+			requests: new Map<number, IRequestRecord>(),
 		};
 
 		const outputEventListener = (event: MessageEvent) => {
@@ -43,9 +43,9 @@ export const createEventTransport = (s: typeof ElizaService) =>
 				if (pending.requests.has(sequence)) {
 					const { resolve, reject } = pending.requests.get(
 						sequence,
-					) as Responder;
+					) as IRequestRecord;
 					if (failure)
-						return pending.requests.delete(sequence) && reject(failure);
+						return pending.requests.delete(sequence) && reject(event.data);
 					else if (!stream || stream.end)
 						return pending.requests.delete(sequence) && resolve(event.data);
 					else if (stream) return resolve(event.data);
@@ -54,10 +54,10 @@ export const createEventTransport = (s: typeof ElizaService) =>
 		};
 		window.addEventListener("message", outputEventListener);
 
-		const unaryPromiseI = (
+		const unaryI = async (
 			input: JsonValue,
 			typeName: string,
-		): Promise<TransportMessageEventData> => {
+		): Promise<{ output: JsonValue; typeName: string }> => {
 			const sequence = ++pending.sequence;
 			const promiseResponse = new Promise<TransportMessageEventData>(
 				(resolve, reject) => {
@@ -65,111 +65,107 @@ export const createEventTransport = (s: typeof ElizaService) =>
 					pending.requests.set(sequence, { resolve, reject });
 				},
 			);
-			const inputEvent: TransportMessageEventData = {
+			window.postMessage({
 				type: "_BUF_TRANSPORT_I",
 				sequence,
 				message: input,
 				typeName,
-			};
-			window.postMessage(inputEvent);
-			return promiseResponse;
+			} as TransportMessageEventData);
+			const response = await promiseResponse;
+			return { output: response.message, typeName: response.typeName };
 		};
 
-		const serverStreamPromiseI = (
-			input: JsonValue,
-			typeName: string,
-		): { next: () => Promise<TransportMessageEventData> } => {
-			const sequence = ++pending.sequence;
-			const queue: Array<TransportMessageEventData> = [];
-			let resolver: (() => void) | null = null;
-
-			const next = (): Promise<TransportMessageEventData> => {
-				return new Promise((resolve) => {
-					if (queue.length > 0) {
-						resolve(queue.shift()!);
-					} else {
-						resolver = () => {
-							resolve(queue.shift()!);
-							resolver = null;
-						};
-					}
-				});
-			};
-
-			pending.requests.set(sequence, {
-				resolve: (m) => {
-					queue.push(m);
-					if (resolver) {
-						resolver();
-						resolver = null;
-					}
-				},
-				reject: (error) => {
-					// Handle the error as appropriate
-				},
-			});
-
-			const inputEvent: TransportMessageEventData = {
-				type: "_BUF_TRANSPORT_I",
-				sequence,
-				message: input,
-				typeName,
-			};
-			window.postMessage(inputEvent);
-
-			return { next };
-		};
-
-		const unaryEventClient = async <T>(request: Message): Promise<T> => {
-			const unaryPromiseO = (await unaryPromiseI(
-				request.toJson(),
-				request.getType().typeName,
-			)) as TransportMessageEventData;
-			// TODO: coerce more specifically
-			return unaryPromiseO.message as T;
-		};
-
-		async function* serverStreamEventClient<
-			T,
-		>(request: Message): AsyncGenerator<T> {
-			const { next } = serverStreamPromiseI(
+		const unaryEventClient = async <I extends Message, O extends Message>(
+			request: I,
+		): Promise<O> => {
+			const { output, typeName } = await unaryI(
 				request.toJson(),
 				request.getType().typeName,
 			);
+			return output as unknown as O; // TODO: coerce properly
+		};
+
+		const serverStreamI = async function* (
+			input: JsonValue,
+			typeName: string,
+		): AsyncGenerator<{ output: JsonValue; typeName: string }> {
+			const sequence = ++pending.sequence;
+			const queue = new Array<TransportMessageEventData>();
+
+			let queueContent: ((value?: unknown) => void) | null;
+			pending.requests.set(sequence, {
+				resolve: (m: TransportMessageEventData) => {
+					queue.push(m);
+					queueContent?.();
+					queueContent = null;
+				},
+				reject: (e?: Error) => {
+					throw e; // TODO?
+				},
+			} as IRequestRecord);
+
+			window.postMessage({
+				type: "_BUF_TRANSPORT_I",
+				sequence,
+				message: input,
+				typeName,
+			} as TransportMessageEventData);
 
 			while (true) {
-				const eventData = await next();
+				if (!queue.length)
+					await new Promise((resolve) => {
+						queueContent = resolve;
+					});
+				const partial = queue.shift();
+				if (partial instanceof Error) throw partial;
+				const { stream, failure, message, typeName } =
+					partial as TransportMessageEventData;
+				if (stream?.end || failure) break;
+				yield { output: message, typeName };
+			}
+		};
 
-				if (eventData?.stream?.end) break;
-				if (eventData?.failure) break;
-
-				yield eventData.message as T;
+		async function* serverStreamEventClient<
+			I extends Message,
+			O extends Message,
+		>(request: I): AsyncGenerator<O> {
+			const stream = serverStreamI(
+				request.toJson(),
+				request.getType().typeName,
+			);
+			for await (const { output, typeName } of stream) {
+				yield output as unknown as O; // TODO: coerce properly
 			}
 		}
 
-		async function* clientStreamEventClient<T>(inputStream: AsyncIterable<T>) {
-			yield { sentence: "TODO" } as T;
+		async function* clientStreamEventClient<
+			I extends Message,
+			O extends Message,
+		>(inputStream: AsyncIterable<I>): AsyncGenerator<O> {
+			yield { sentence: "TODO" } as unknown as O; // TODO
 		}
 
 		service(s, {
-			// TODO converse bidi
-			say: async (message: SayRequest) => {
-				const out = unaryEventClient<SayResponse>(message);
+			say: async function (message: SayRequest) {
+				const out = unaryEventClient<SayRequest, SayResponse>(message);
 				return new SayResponse(await out);
 			},
 			introduce: async function* (message) {
-				for await (const part of serverStreamEventClient<IntroduceResponse>(
-					message,
-				)) {
+				const out = serverStreamEventClient<
+					IntroduceRequest,
+					IntroduceResponse
+				>(message);
+				for await (const part of out) {
 					yield new IntroduceResponse(part);
 				}
 			},
 			converse: async function* (
 				messageStream: AsyncIterable<ConverseRequest>,
 			) {
-				for await (const part of clientStreamEventClient<ConverseResponse>(
+				const out = clientStreamEventClient<ConverseRequest, ConverseResponse>(
 					messageStream,
-				)) {
+				);
+				for await (const part of out) {
 					yield new ConverseResponse(part);
 				}
 			},

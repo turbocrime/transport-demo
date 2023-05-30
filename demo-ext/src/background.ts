@@ -32,8 +32,12 @@ type TransportMessageEvent = {
 };
 
 // TODO: use Any.pack() and registry to unpack instead of json and string matching
-const serviceRegistry = createRegistry(ElizaService);
-console.log("Background elizaTypes", serviceRegistry);
+const registry = createRegistry(ElizaService);
+console.log("Background elizaTypes", registry);
+
+const counterpart = (typeName: string) =>
+	typeName.replace(/Request$/, "Response") ||
+	typeName.replace(/Response$/, "Request");
 
 chrome.runtime.onMessage.addListener(
 	async (
@@ -42,29 +46,33 @@ chrome.runtime.onMessage.addListener(
 	) => {
 		if (messageEvent.type !== "_BUF_TRANSPORT_I") return;
 		const { sequence, stream, message, typeName } = messageEvent;
-		if (typeName === "buf.connect.demo.eliza.v1.SayRequest") {
-			let response;
-			response = await proxiedClient.say(message as { sentence: string });
+		const inputMessage = registry.findMessage(typeName)!;
+		const outputMessage = registry.findMessage(counterpart(typeName))!;
+		console.log("Background identified type pair", inputMessage, outputMessage);
+		if (inputMessage.typeName === "buf.connect.demo.eliza.v1.SayRequest") {
+			const response = await proxiedClient.say(message as { sentence: string });
 			// modify response
-			response = new SayResponse({
+			const esnopser = new outputMessage({
 				sentence: [...response.sentence].reverse().join(""),
 			});
 			const responseMessage: TransportMessageEvent = {
 				type: "_BUF_TRANSPORT_O",
 				sequence,
-				message: response.toJson(),
-				typeName: response.getType().typeName,
+				message: esnopser.toJson(),
+				typeName: esnopser.getType().typeName,
 			};
 			chrome.tabs.sendMessage(sender?.tab?.id as number, responseMessage);
 		}
-		if (typeName === "buf.connect.demo.eliza.v1.IntroduceRequest") {
+		if (
+			inputMessage.typeName === "buf.connect.demo.eliza.v1.IntroduceRequest"
+		) {
 			// modify request
-			const intro = {
+			const mEsSaGe = {
 				name: Array.from((message as { name: string }).name)
 					.map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase()))
 					.join(""),
 			};
-			const stream = await proxiedClient.introduce(intro);
+			const stream = await proxiedClient.introduce(mEsSaGe);
 			let streamIdx = 0;
 			for await (const partial of stream) {
 				const partialMessage: TransportMessageEvent = {
@@ -80,7 +88,7 @@ chrome.runtime.onMessage.addListener(
 				type: "_BUF_TRANSPORT_O",
 				sequence,
 				stream: { sequence: streamIdx, end: true },
-				typeName: "buf.connect.demo.eliza.v1.IntroduceResponse",
+				typeName: outputMessage.typeName,
 			});
 		}
 	},
