@@ -1,8 +1,11 @@
-const webpack = require("webpack");
-const path = require("path");
-const CopyPlugin = require("copy-webpack-plugin");
+import { resolve } from "path";
+import CopyPlugin from "copy-webpack-plugin";
+import WebExt from "web-ext";
 
-module.exports = {
+const DIST_PATH = resolve("dist");
+
+export default {
+	mode: "development",
 	devtool: "inline-source-map",
 	entry: {
 		popup: "./src/popup.tsx",
@@ -11,7 +14,7 @@ module.exports = {
 		content: "./src/content.ts",
 	},
 	output: {
-		path: path.resolve("./dist"),
+		path: resolve("dist"),
 		filename: "[name].js",
 	},
 	optimization: {
@@ -30,5 +33,26 @@ module.exports = {
 		],
 	},
 	resolve: { extensions: [".ts", ".tsx", ".js"] },
-	plugins: [new CopyPlugin({ patterns: ["ext-assets"] })],
+	plugins: [
+		new CopyPlugin({ patterns: ["ext-assets"] }),
+		new (class {
+			apply(compiler) {
+				compiler.hooks.afterEmit.tapPromise(
+					{ name: "WebExt Reloader" },
+					async ({ options }) => {
+						this.webExt?.reloadAllExtensions();
+						this.webExt ??= await WebExt.cmd.run({
+							noReload: true,
+							sourceDir: options.output.path,
+							startUrl: "http://localhost:3000/",
+							target: "chromium",
+						});
+						this.webExt.registerCleanup(() => {
+							this.webExt = null;
+						});
+					},
+				);
+			}
+		})(),
+	],
 };

@@ -89,8 +89,7 @@ from this git root, with pnpm
 
 ```sh
 $ pnpm install
-$ pnpm build
-$ pnpm start
+$ pnpm -r start
 ```
 
 you should see a fresh chrome profile load the extension and navigate to the demo on localhost. talk to ELIZA by typing in the box.
