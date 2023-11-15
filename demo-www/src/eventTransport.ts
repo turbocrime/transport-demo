@@ -1,7 +1,7 @@
-import { createRouterTransport } from "@bufbuild/connect";
+import { createRouterTransport } from "@connectrpc/connect";
 import { Message, MethodKind } from "@bufbuild/protobuf";
 
-import type { ServiceImpl } from "@bufbuild/connect";
+import type { ServiceImpl } from "@connectrpc/connect";
 import type { JsonValue, MethodInfo, ServiceType } from "@bufbuild/protobuf";
 
 type TransportMessageEventData = {

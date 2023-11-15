@@ -1,6 +1,6 @@
-import { createConnectTransport } from "@bufbuild/connect-web";
-import { createPromiseClient } from "@bufbuild/connect";
-import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { createPromiseClient } from "@connectrpc/connect";
+import { ElizaService } from "@buf/connectrpc_eliza.connectrpc_es/connectrpc/eliza/v1/eliza_connect";
 import { createRegistry } from "@bufbuild/protobuf";
 import type { JsonValue } from "@bufbuild/protobuf";
 
@@ -19,7 +19,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
 // TODO: per connected page
 const proxiedClient = createPromiseClient(
 	ElizaService,
-	createConnectTransport({ baseUrl: "https://demo.connect.build" }),
+	createConnectTransport({ baseUrl: "https://demo.connectrpc.com" }),
 );
 
 type TransportMessageEvent = {
@@ -48,7 +48,7 @@ chrome.runtime.onMessage.addListener(
 		const inputMessage = registry.findMessage(typeName)!;
 		const outputMessage = registry.findMessage(counterpart(typeName))!;
 		console.log("Background identified type pair", inputMessage, outputMessage);
-		if (inputMessage.typeName === "buf.connect.demo.eliza.v1.SayRequest") {
+		if (inputMessage.typeName === "connectrpc.eliza.v1.SayRequest") {
 			const response = await proxiedClient.say(message as { sentence: string });
 			// modify response
 			const esnopser = new outputMessage({
@@ -62,9 +62,7 @@ chrome.runtime.onMessage.addListener(
 			};
 			chrome.tabs.sendMessage(sender?.tab?.id as number, responseMessage);
 		}
-		if (
-			inputMessage.typeName === "buf.connect.demo.eliza.v1.IntroduceRequest"
-		) {
+		if (inputMessage.typeName === "connectrpc.eliza.v1.IntroduceRequest") {
 			// modify request
 			const mEsSaGe = {
 				name: Array.from((message as { name: string }).name)

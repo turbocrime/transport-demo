@@ -1,6 +1,6 @@
-import { createPromiseClient } from "@bufbuild/connect";
-//import { IntroduceRequest } from "@buf/bufbuild_eliza.bufbuild_es/buf/connect/demo/eliza/v1/eliza_pb";
-import { ElizaService } from "@buf/bufbuild_eliza.bufbuild_connect-es/buf/connect/demo/eliza/v1/eliza_connect";
+import { createPromiseClient } from "@connectrpc/connect";
+//import { IntroduceRequest } from "@buf/connectrpc_eliza.connectrpc_es/buf/connectrpc/demo/eliza/v1/eliza_pb";
+import { ElizaService } from "@buf/connectrpc_eliza.connectrpc_es/connectrpc/eliza/v1/eliza_connect";
 import { createEventTransport } from "./eventTransport";
 
 let introFinished = false;
